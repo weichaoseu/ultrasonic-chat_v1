@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>超声波聊天 · 手机端</title>
+<style>
+  :root{ --bg:#0f1420; --panel:#1a2233; --line:#2a3448; --txt:#e6edf7; --dim:#8a97ad; --acc:#3fb6ff; --ok:#3fd68f; --warn:#ffb454; --err:#ff6b6b; }
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; }
+  body{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--txt); display:flex; flex-direction:column; }
+
+  header{ padding:10px 14px; border-bottom:1px solid var(--line); background:var(--panel); }
+  .top{ display:flex; align-items:center; gap:10px; }
+  .dot{ width:9px; height:9px; border-radius:50%; background:#5a6577; flex:none; }
+  .dot.on{ background:var(--ok); box-shadow:0 0 6px var(--ok); }
+  h1{ font-size:16px; margin:0; flex:1; font-weight:600; }
+  #connBtn{ background:var(--acc); color:#04121f; border:none; border-radius:7px; padding:7px 14px; font-size:13px; font-weight:600; cursor:pointer; }
+  #connBtn:disabled{ opacity:.5; cursor:default; }
+  #statusText{ font-size:11.5px; color:var(--dim); margin-top:6px; min-height:15px; }
+  .banner{ margin-top:8px; padding:9px 11px; border-radius:7px; font-size:12px; line-height:1.5; }
+  .banner.err{ background:#3a1d24; color:#ffb4b4; border:1px solid #6b2b35; }
+  .banner.warn{ background:#3a2d14; color:#ffd9a0; border:1px solid #6b5420; }
+
+  #chat{ flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:10px; }
+  .msg{ display:flex; flex-direction:column; max-width:78%; }
+  .msg.me{ align-self:flex-end; align-items:flex-end; }
+  .msg.peer{ align-self:flex-start; align-items:flex-start; }
+  .bubble{ padding:9px 13px; border-radius:15px; font-size:14px; word-break:break-word; white-space:pre-wrap; line-height:1.5; }
+  .me .bubble{ background:var(--acc); color:#04121f; border-bottom-right-radius:4px; }
+  .peer .bubble{ background:#2a3448; color:var(--txt); border-bottom-left-radius:4px; }
+  .bubble.fail{ background:#7a2b38; color:#ffd7dc; }
+  .bubble a{ color:#04121f; }
+  .peer .bubble a{ color:#9fd0ff; }
+  .meta{ font-size:10.5px; color:var(--dim); margin-top:3px; padding:0 4px; }
+
+  footer{ display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--line); background:var(--panel); align-items:flex-end; }
+  #msgInput{ flex:1; resize:none; max-height:120px; background:#0c1220; border:1px solid var(--line); color:var(--txt); border-radius:9px; padding:10px 12px; font-size:15px; font-family:inherit; line-height:1.4; }
+  footer button{ border:none; border-radius:9px; padding:11px 14px; font-size:14px; cursor:pointer; font-weight:600; }
+  #sendBtn{ background:var(--acc); color:#04121f; }
+  #fileBtn, #diagBtn{ background:#2a3448; color:var(--txt); padding:11px 13px; }
+
+  #diag{ border-top:1px solid var(--line); background:var(--panel); padding:12px 14px; }
+  #diag[hidden]{ display:none; }
+  .diagrow{ display:flex; align-items:center; gap:10px; font-size:12px; color:var(--dim); margin-bottom:8px; }
+  .meter{ flex:1; height:8px; background:#0c1220; border-radius:4px; overflow:hidden; border:1px solid var(--line); }
+  .meter > div{ height:100%; width:0%; background:linear-gradient(90deg,var(--ok),var(--warn),var(--err)); transition:width .1s; }
+  .diagbtns{ display:flex; gap:8px; flex-wrap:wrap; }
+  .diagbtns button{ background:#2a3448; color:var(--txt); border:none; border-radius:7px; padding:8px 12px; font-size:12.5px; cursor:pointer; }
+  .kv{ font-size:11.5px; color:var(--dim); margin-top:8px; }
+  .kv b{ color:var(--txt); }
+  #log{ margin-top:8px; background:#0c1220; border:1px solid var(--line); border-radius:7px; padding:8px; font-size:11px; max-height:120px; overflow:auto; white-space:pre-wrap; word-break:break-all; font-family:ui-monospace,Consolas,monospace; }
+  #log .t{ color:var(--dim); }
+  #log .ok{ color:var(--ok); }
+  #log .err{ color:var(--err); }
+  #log .warn{ color:var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <span class="dot" id="connDot"></span>
+    <h1>🔊 超声波聊天 · 手机端</h1>
+    <button id="connBtn">连接</button>
+  </div>
+  <div id="statusText">未连接 —— 点右上角「连接」授权麦克风</div>
+  <div id="envBanner"></div>
+</header>
+
+<main id="chat"></main>
+
+<footer>
+  <button id="fileBtn" title="发送文件">📎</button>
+  <input type="file" id="fileInput" hidden>
+  <textarea id="msgInput" rows="1" placeholder="输入消息…"></textarea>
+  <button id="sendBtn">发送</button>
+  <button id="diagBtn" title="诊断">⚙</button>
+</footer>
+
+<div id="diag" hidden>
+  <div class="diagrow">实时电平 <div class="meter"><div id="meterBar"></div></div></div>
+  <div class="diagbtns">
+    <button id="selfTestBtn">自测（本地回环）</button>
+    <button id="testToneBtn">播放测试音</button>
+  </div>
+  <div class="kv">本机发射 <b id="txFreq"></b> · 本机接收 <b id="rxFreq"></b></div>
+  <div id="log"></div>
+</div>
+
+<script>
+"use strict";
+/* =====================================================================
+ * 可调参数
+ * ===================================================================== */
+const CONFIG = {
+  txF0: 15500, txF1: 16500,   // 本机发射（手机 → 笔记本，低频段，手机扬声器高频差）
+  rxF0: 18500, rxF1: 19500,   // 本机接收（笔记本 → 手机，高频段）
+  symbolMs: 20,
+  gain: 0.8,
+  payloadBytes: 16,
+  maxRetransmit: 5,
+  ackTimeoutMs: 4000,
+  rmsThreshold: 0.02,
+  syncThreshold: 0.6,
+  preambleBits: 16,
+  syncWord: 0x1D97,
+  sampleRate: 48000,
+  sps: 960,
+  hop: 240
+};
+function deriveRates(){
+  const raw = Math.round(CONFIG.symbolMs / 1000 * CONFIG.sampleRate);
+  CONFIG.sps = Math.max(4, 4 * Math.round(raw / 4));   // sps 取 4 的倍数，确保 hop = sps/4 精确
+  CONFIG.hop = Math.max(1, Math.round(CONFIG.sps / 4));
+}
+deriveRates();
+
+/* =====================================================================
+ * 工具
+ * ===================================================================== */
+function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+function pushBits(arr, value, nBits){ for (let i = nBits - 1; i >= 0; i--) arr.push((value >> i) & 1); }
+function crc32(bytes){
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++){
+    crc ^= bytes[i];
+    for (let k = 0; k < 8; k++) crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+function crc32Bytes(bytes){ const c = crc32(bytes); return [(c>>>24)&0xff,(c>>>16)&0xff,(c>>>8)&0xff,c&0xff]; }
+function textToBytes(s){ return Array.from(new TextEncoder().encode(s)); }
+function looksLikeText(u8){
+  try{ const s = new TextDecoder("utf-8",{fatal:false}).decode(u8); return s.length>0 && s.indexOf("�")<0; }
+  catch(e){ return false; }
+}
+function chunk(bytes, size){ const o=[]; for(let i=0;i<bytes.length;i+=size) o.push(bytes.slice(i,i+size)); return o; }
+
+/* =====================================================================
+ * 调制（相位连续 FSK，尾部补静音确保末位可解）
+ * ===================================================================== */
+function modulate(bits, f0, f1){
+  const sps = CONFIG.sps, sr = CONFIG.sampleRate;
+  const out = new Float32Array(bits.length * sps + sps);   // 末尾额外补一个符号的静音
+  let phase = 0;
+  const w0 = 2*Math.PI*f0/sr, w1 = 2*Math.PI*f1/sr;
+  for (let i = 0; i < bits.length; i++){
+    const w = bits[i] ? w1 : w0;
+    for (let j = 0; j < sps; j++){ phase += w; out[i*sps + j] = Math.sin(phase); }
+  }
+  const fade = Math.min(Math.round(0.004*sr), Math.floor(bits.length*sps/4));
+  for (let i = 0; i < fade; i++){
+    const k = 0.5 - 0.5*Math.cos(Math.PI*i/fade);
+    out[i] *= k;
+    out[bits.length*sps - 1 - i] *= k;
+  }
+  return out;
+}
+
+function buildFrame(type, seq, total, payload){
+  const bits = [];
+  for (let i = 0; i < CONFIG.preambleBits; i++) bits.push(i & 1);
+  pushBits(bits, CONFIG.syncWord, 16);
+  const header = [payload.length & 0xff, seq & 0xff, total & 0xff, type & 0xff];
+  const crc = crc32Bytes([...header, ...payload]);
+  for (const b of header) pushBits(bits, b, 8);
+  for (const b of payload) pushBits(bits, b, 8);
+  for (const b of crc)     pushBits(bits, b, 8);
+  return { bits, audio: modulate(bits, CONFIG.txF0, CONFIG.txF1) };
+}
+
+/* =====================================================================
+ * 解调
+ * ===================================================================== */
+function goertzelPower(samples, start, len, freq, sr){
+  const w = 2*Math.PI*freq/sr, coeff = 2*Math.cos(w);
+  let s1=0, s2=0;
+  for (let i=0;i<len;i++){
+    const x = samples[start+i], s0 = x + coeff*s1 - s2;
+    s2=s1; s1=s0;
+  }
+  return s1*s1 + s2*s2 - coeff*s1*s2;
+}
+function symToInt(sym, bitStart, nBits){ let v=0; for(let i=0;i<nBits;i++) v=(v<<1)|(sym[bitStart+i]>=0?1:0); return v>>>0; }
+
+function decodeFromDecisions(decisions){
+  const SYNC = [];
+  for (let i = 15; i >= 0; i--) SYNC.push(((CONFIG.syncWord >> i) & 1) ? 1 : -1);
+  let best = { corrNorm: -1 };
+  for (let phase = 0; phase < 4; phase++){
+    const nSym = Math.floor((decisions.length - phase) / 4);
+    if (nSym < 16 + 32 + 32) continue;
+    const sym = new Float32Array(nSym);
+    for (let k = 0; k < nSym; k++){ let s=0; for(let j=0;j<4;j++) s += decisions[phase+4*k+j]; sym[k]=s; }
+    const maxStart = nSym - 16 - 32 - 32;
+    for (let start = 0; start <= maxStart; start++){
+      let corr=0, sumAbs=0;
+      for (let i=0;i<16;i++){ const v=sym[start+i]; corr += v*SYNC[i]; sumAbs += Math.abs(v); }
+      const corrNorm = sumAbs>1e-9 ? corr/sumAbs : 0;
+      if (corrNorm > best.corrNorm) best = { phase, start, corrNorm, sym, nSym };
+    }
+  }
+  if (best.corrNorm < CONFIG.syncThreshold) return null;
+  const { sym, start } = best;
+  const hdrStart = start + 16;
+  const header = [symToInt(sym,hdrStart,8), symToInt(sym,hdrStart+8,8), symToInt(sym,hdrStart+16,8), symToInt(sym,hdrStart+24,8)];
+  const len = header[0], seq = header[1], total = header[2], type = header[3];
+  const need = 16 + 32 + len*8 + 32;
+  if (start + need > best.nSym) return null;
+  const payloadStart = hdrStart + 32;
+  const payload = [];
+  for (let i=0;i<len;i++) payload.push(symToInt(sym, payloadStart+i*8, 8));
+  const crcStart = payloadStart + len*8;
+  const crc = [symToInt(sym,crcStart,8), symToInt(sym,crcStart+8,8), symToInt(sym,crcStart+16,8), symToInt(sym,crcStart+24,8)];
+  const expected = crc32Bytes([...header, ...payload]);
+  const crcOk = crc[0]===expected[0] && crc[1]===expected[1] && crc[2]===expected[2] && crc[3]===expected[3];
+  return { header, payload, crcOk, corrNorm: best.corrNorm };
+}
+
+function decodeFromSamples(samples, f0, f1){
+  if (f0 === undefined) f0 = CONFIG.rxF0;
+  if (f1 === undefined) f1 = CONFIG.rxF1;
+  const sps = CONFIG.sps, hop = CONFIG.hop, N = samples.length;
+  if (N < sps) return null;
+  const decisions = [];
+  for (let t = 0; t + sps <= N; t += hop){
+    const e0 = goertzelPower(samples, t, sps, f0, CONFIG.sampleRate);
+    const e1 = goertzelPower(samples, t, sps, f1, CONFIG.sampleRate);
+    decisions.push(e1 - e0);
+  }
+  return decodeFromDecisions(decisions);
+}
+
+/* =====================================================================
+ * 音频
+ * ===================================================================== */
+let audioCtx = null;
+async function ensureAudio(){
+  if (!audioCtx){
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: CONFIG.sampleRate });
+    CONFIG.sampleRate = audioCtx.sampleRate;
+    deriveRates();
+  }
+  if (audioCtx.state === "suspended") await audioCtx.resume();
+  return audioCtx;
+}
+let txBusy = false, deafUntil = 0;
+function playSamples(samples){
+  return new Promise((resolve) => {
+    const buf = audioCtx.createBuffer(1, samples.length, CONFIG.sampleRate);
+    buf.getChannelData(0).set(samples);
+    const src = audioCtx.createBufferSource(); src.buffer = buf;
+    const g = audioCtx.createGain(); g.gain.value = CONFIG.gain;
+    src.connect(g); g.connect(audioCtx.destination);
+    txBusy = true;
+    deafUntil = performance.now() + (samples.length / CONFIG.sampleRate) * 1000 + 300;
+    src.onended = () => { txBusy = false; resolve(); };
+    src.start();
+  });
+}
+async function sendFrame(type, seq, total, payload){
+  if (txBusy) return false;
+  const f = buildFrame(type, seq, total, payload);
+  await playSamples(f.audio);
+  return true;
+}
+
+/* =====================================================================
+ * 接收
+ * ===================================================================== */
+let micStream=null, scriptNode=null, connected=false;
+let rxBuf=new Float32Array(0), lastEnergy=0;
+let rxChunks={}, rxTotal=-1, lastRxBytes=null, ackWaiter=null;
+
+async function startListening(){
+  const ctx = await ensureAudio();
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+  });
+  const src = ctx.createMediaStreamSource(micStream);
+  scriptNode = ctx.createScriptProcessor(4096, 1, 1);
+  const mute = ctx.createGain(); mute.gain.value = 0;
+  src.connect(scriptNode); scriptNode.connect(mute); mute.connect(ctx.destination);
+  scriptNode.onaudioprocess = onAudio;
+  log("已开始监听", "ok");
+}
+
+function onAudio(e){
+  const data = e.inputBuffer.getChannelData(0);
+  const now = performance.now();
+  if (now < deafUntil){ rxBuf = new Float32Array(0); return; }
+  const tmp = new Float32Array(rxBuf.length + data.length);
+  tmp.set(rxBuf); tmp.set(data, rxBuf.length); rxBuf = tmp;
+  const maxRx = Math.round(CONFIG.sampleRate * 7);
+  if (rxBuf.length > maxRx) rxBuf = rxBuf.slice(rxBuf.length - maxRx);
+
+  const sps = CONFIG.sps;
+  const n = Math.min(sps, rxBuf.length);
+  let sum = 0;
+  for (let i = rxBuf.length - n; i < rxBuf.length; i++) sum += rxBuf[i]*rxBuf[i];
+  const rms = Math.sqrt(sum / n);
+  meterBar.style.width = Math.min(100, (rms/0.1)*100).toFixed(1) + "%";
+  if (rms > CONFIG.rmsThreshold) lastEnergy = now;
+
+  if (txBusy) return;
+  const minSamples = (16 + 16 + 32 + 32) * sps;
+  if (rxBuf.length >= minSamples && (now - lastEnergy) < 1500){
+    const res = decodeFromSamples(rxBuf);
+    if (res && res.crcOk){ rxBuf = new Float32Array(0); handleFrame(res); }
+  }
+}
+
+function handleFrame(f){
+  const [len, seq, total, type] = f.header;
+  log(`收帧 type=${type} seq=${seq} crc=${f.crcOk?"OK":"FAIL"} corr=${f.corrNorm.toFixed(2)}`);
+  if (type === 0){
+    if (f.crcOk){
+      rxTotal = total; rxChunks[seq] = f.payload;
+      sendFrame(1, seq, total, []);
+      if (Object.keys(rxChunks).length === total){
+        const bytes = [];
+        for (let i=0;i<total;i++){ const c=rxChunks[i]; if(!c){ log("缺包 "+i,"err"); return; } bytes.push(...c); }
+        rxChunks = {}; rxTotal = -1;
+        deliverReceived(new Uint8Array(bytes));
+        sendFrame(3, total, total, []);
+      }
+    } else {
+      sendFrame(2, seq, total, []);
+    }
+  } else if (type === 1){ if (ackWaiter) ackWaiter(true, seq); }
+  else if (type === 2){ if (ackWaiter) ackWaiter(false, seq); }
+  else if (type === 3){ log("对方已确认接收完成", "ok"); }
+}
+
+function waitForAck(seq, timeoutMs){
+  return new Promise((resolve) => {
+    let done = false;
+    ackWaiter = (ok, s) => { if (s === seq && !done){ done = true; ackWaiter = null; resolve(ok); } };
+    setTimeout(() => { if (!done){ done = true; ackWaiter = null; resolve(false); } }, timeoutMs);
+  });
+}
+
+/* =====================================================================
+ * 发送（先听后发 + 停等式 ARQ）
+ * ===================================================================== */
+async function carrierSense(){
+  const deadline = performance.now() + 3000;
+  while (performance.now() < deadline){
+    if (!connected) return;
+    if (performance.now() - lastEnergy > 400) return;
+    await sleep(80);
+  }
+}
+
+let sending = false;
+async function sendMessage(bytes, onProgress){
+  await ensureAudio();
+  await carrierSense();
+  const chunks = chunk(bytes, CONFIG.payloadBytes);
+  const total = chunks.length;
+  for (let seq = 0; seq < total; seq++){
+    let ok = false;
+    for (let attempt = 1; attempt <= CONFIG.maxRetransmit && !ok; attempt++){
+      await sendFrame(0, seq, total, chunks[seq]);
+      const ack = await waitForAck(seq, CONFIG.ackTimeoutMs);
+      if (ack) ok = true;
+    }
+    if (!ok) return false;
+    onProgress && onProgress(seq + 1, total);
+  }
+  await sendFrame(3, total, total, []);
+  return true;
+}
+
+/* =====================================================================
+ * 聊天 UI
+ * ===================================================================== */
+function addMsg(text, who, statusText){
+  const chat = document.getElementById("chat");
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + (who === "me" ? "me" : "peer");
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = text;
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const time = new Date().toTimeString().slice(0, 8);
+  meta.textContent = time + (statusText ? " · " + statusText : "");
+  wrap.appendChild(bubble); wrap.appendChild(meta);
+  chat.appendChild(wrap);
+  chat.scrollTop = chat.scrollHeight;
+  return {
+    setStatus(s){ meta.textContent = time + " · " + s; },
+    markFail(){ bubble.classList.add("fail"); },
+    setDownload(u8){
+      bubble.textContent = "";
+      const a = document.createElement("a");
+      a.textContent = "📎 收到文件（" + u8.length + " 字节）· 点此下载";
+      a.href = URL.createObjectURL(new Blob([u8], { type: "application/octet-stream" }));
+      a.download = "received_" + Date.now() + ".bin";
+      bubble.appendChild(a);
+    }
+  };
+}
+
+function deliverReceived(u8){
+  lastRxBytes = u8;
+  if (looksLikeText(u8)){
+    addMsg(new TextDecoder("utf-8").decode(u8), "peer");
+  } else {
+    addMsg("", "peer").setDownload(u8);
+  }
+}
+
+async function doSend(text, file){
+  if (sending){ setStatus("上一消息还在发送中…", "warn"); return; }
+  let bytes, kind;
+  if (file){
+    bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+    kind = "file";
+  } else {
+    if (!text || !text.trim()) return;
+    bytes = textToBytes(text);
+    kind = "text";
+  }
+  if (!connected){ setStatus("尚未连接，点右上角「连接」", "warn"); return; }
+
+  sending = true;
+  const bubble = addMsg(kind === "file" ? ("📎 " + file.name + "（" + bytes.length + " 字节）") : text, "me", "准备发送…");
+  try{
+    const ok = await sendMessage(bytes, (sent, total) => bubble.setStatus("发送中 " + sent + "/" + total));
+    if (ok) bubble.setStatus("已送达 ✓");
+    else { bubble.setStatus("发送失败 ✗"); bubble.markFail(); }
+  }catch(e){
+    bubble.setStatus("发送失败 ✗"); bubble.markFail();
+    log("发送异常：" + e.message, "err");
+  }
+  sending = false;
+}
+
+/* =====================================================================
+ * 自测 + 诊断
+ * ===================================================================== */
+async function selfTest(){
+  await ensureAudio();
+  const payload = textToBytes("HELLO-123");
+  const f = buildFrame(0, 0, 1, payload);
+  const res = decodeFromSamples(f.audio, CONFIG.txF0, CONFIG.txF1);
+  if (res && res.crcOk && res.header[0] === payload.length && res.payload.join() === payload.join()){
+    log("自测通过 ✓（调制→解调→CRC 正常）", "ok");
+  } else {
+    log("自测失败 ✗（corr=" + (res?res.corrNorm.toFixed(2):"null") + "）", "err");
+  }
+}
+async function playTestTone(){
+  await ensureAudio();
+  const f = buildFrame(1, 0, 1, []);
+  await playSamples(f.audio);
+  log("已播放测试音");
+}
+
+/* =====================================================================
+ * 基础 UI
+ * ===================================================================== */
+function log(msg, cls){
+  const el = document.getElementById("log");
+  const t = new Date().toTimeString().slice(0, 8);
+  const d = document.createElement("div");
+  d.innerHTML = `<span class="t">[${t}]</span> ` + (cls ? `<span class="${cls}">${msg}</span>` : msg);
+  el.appendChild(d);
+  while (el.children.length > 100) el.removeChild(el.firstChild);
+  el.scrollTop = el.scrollHeight;
+}
+function setStatus(msg, cls){
+  const el = document.getElementById("statusText");
+  el.textContent = msg;
+  el.style.color = cls === "warn" ? "var(--warn)" : (cls === "err" ? "var(--err)" : "var(--dim)");
+}
+
+function checkEnv(){
+  const b = document.getElementById("envBanner");
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    b.className = "banner err";
+    b.textContent = "⚠ 麦克风不可用：当前页面非安全上下文（" + location.protocol + "）。安卓 Chrome 请打开 chrome://flags/#unsafely-treat-insecure-origin-as-secure 把本页加入白名单并重启。";
+  } else {
+    b.className = "banner warn";
+    b.textContent = "提示：file:// 下若麦克风被拒，请用上方 Chrome 白名单方式；或先用本机两个标签页互通验证。";
+  }
+}
+
+async function connect(){
+  try{
+    await ensureAudio();
+    await startListening();
+    connected = true;
+    connDot.classList.add("on");
+    connBtn.textContent = "已连接"; connBtn.disabled = true;
+    setStatus("已连接，可收发消息");
+  }catch(e){
+    setStatus("连接失败：" + e.message, "err");
+    const b = document.getElementById("envBanner");
+    b.className = "banner err";
+    b.textContent = "麦克风启动失败：" + e.message + "（file:// 下需 Chrome 白名单或 HTTPS）";
+  }
+}
+
+function bindUI(){
+  document.getElementById("connBtn").addEventListener("click", connect);
+  document.getElementById("diagBtn").addEventListener("click", () => {
+    const d = document.getElementById("diag");
+    d.hidden = !d.hidden;
+  });
+  document.getElementById("selfTestBtn").addEventListener("click", () => selfTest().catch(e => log("自测出错："+e.message,"err")));
+  document.getElementById("testToneBtn").addEventListener("click", () => playTestTone().catch(e => log("播放失败："+e.message,"err")));
+
+  const input = document.getElementById("msgInput");
+  const send = () => {
+    const v = input.value;
+    const file = document.getElementById("fileInput").files[0];
+    doSend(v, file).catch(e => log("发送出错："+e.message,"err"));
+    input.value = "";
+    document.getElementById("fileInput").value = "";
+  };
+  document.getElementById("sendBtn").addEventListener("click", send);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); send(); }
+  });
+  document.getElementById("fileBtn").addEventListener("click", () => document.getElementById("fileInput").click());
+  document.getElementById("fileInput").addEventListener("change", (e) => {
+    if (e.target.files[0]){ setStatus("已选择文件：" + e.target.files[0].name); }
+  });
+}
+
+/* =====================================================================
+ * 初始化
+ * ===================================================================== */
+const meterBar = document.getElementById("meterBar");
+const connDot = document.getElementById("connDot");
+const connBtn = document.getElementById("connBtn");
+
+document.getElementById("txFreq").textContent = (CONFIG.txF0/1000).toFixed(1) + " / " + (CONFIG.txF1/1000).toFixed(1) + " kHz";
+document.getElementById("rxFreq").textContent = (CONFIG.rxF0/1000).toFixed(1) + " / " + (CONFIG.rxF1/1000).toFixed(1) + " kHz";
+
+checkEnv();
+bindUI();
+log("页面加载。先点右上角「连接」，再用 ⚙ 里的「自测」验证。");
+addMsg("对方发送的消息会显示在这里", "peer");
+</script>
+</body>
+</html>
