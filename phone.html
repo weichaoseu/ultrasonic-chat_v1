@@ -79,6 +79,13 @@
 
 <div id="diag" hidden>
   <div class="diagrow">实时电平 <div class="meter"><div id="meterBar"></div></div></div>
+  <div class="diagrow">传输速度
+    <select id="speedSel" style="background:#0c1220;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12.5px;">
+      <option value="10">快（10ms/bit）</option>
+      <option value="15" selected>标准（15ms/bit）</option>
+      <option value="20">稳（20ms/bit）</option>
+    </select>
+  </div>
   <div class="diagbtns">
     <button id="selfTestBtn">自测（本地回环）</button>
     <button id="testToneBtn">播放测试音</button>
@@ -95,9 +102,9 @@
 const CONFIG = {
   txF0: 15500, txF1: 16500,   // 本机发射（手机 → 笔记本，低频段，手机扬声器高频差）
   rxF0: 18500, rxF1: 19500,   // 本机接收（笔记本 → 手机，高频段）
-  symbolMs: 20,
+  symbolMs: 15,   // 每比特时长(ms)：10快 / 15标准 / 20稳
   gain: 0.8,
-  payloadBytes: 16,
+  payloadBytes: 48,   // 每包负载字节数（越大长消息越快）
   maxRetransmit: 5,
   ackTimeoutMs: 4000,
   rmsThreshold: 0.02,
@@ -112,6 +119,8 @@ function deriveRates(){
   const raw = Math.round(CONFIG.symbolMs / 1000 * CONFIG.sampleRate);
   CONFIG.sps = Math.max(4, 4 * Math.round(raw / 4));   // sps 取 4 的倍数，确保 hop = sps/4 精确
   CONFIG.hop = Math.max(1, Math.round(CONFIG.sps / 4));
+  CONFIG.ackTimeoutMs = Math.round(96 * CONFIG.sps / CONFIG.sampleRate * 1000) + 2500;   // ACK 帧时长 + 余量
+  CONFIG.maxRxSamples = Math.round((96 + CONFIG.payloadBytes * 8) * CONFIG.sps * 1.5);   // 按最大帧预留缓冲
 }
 deriveRates();
 
@@ -226,7 +235,8 @@ function decodeFromSamples(samples, f0, f1){
   for (let t = 0; t + sps <= N; t += hop){
     const e0 = goertzelPower(samples, t, sps, f0, CONFIG.sampleRate);
     const e1 = goertzelPower(samples, t, sps, f1, CONFIG.sampleRate);
-    decisions.push(e1 - e0);
+    const denom = e0 + e1;
+    decisions.push(denom > 1e-9 ? (e1 - e0) / denom : 0);   // 归一化，抗音量变化
   }
   return decodeFromDecisions(decisions);
 }
@@ -271,6 +281,7 @@ async function sendFrame(type, seq, total, payload){
 let micStream=null, scriptNode=null, connected=false;
 let rxBuf=new Float32Array(0), lastEnergy=0;
 let rxChunks={}, rxTotal=-1, lastRxBytes=null, ackWaiter=null;
+let calib = null;   // 噪声底校准状态
 
 async function startListening(){
   const ctx = await ensureAudio();
@@ -282,16 +293,31 @@ async function startListening(){
   const mute = ctx.createGain(); mute.gain.value = 0;
   src.connect(scriptNode); scriptNode.connect(mute); mute.connect(ctx.destination);
   scriptNode.onaudioprocess = onAudio;
-  log("已开始监听", "ok");
+  calib = { t0: 0, sum: 0, n: 0 };   // 连接后自动校准噪声底
+  log("已开始监听（正在校准噪声底…）", "ok");
 }
 
 function onAudio(e){
   const data = e.inputBuffer.getChannelData(0);
   const now = performance.now();
+
+  // 连接后约 0.6 秒自动校准噪声底，设定能量检测阈值
+  if (calib){
+    if (!calib.t0) calib.t0 = now;
+    for (let i = 0; i < data.length; i++) calib.sum += data[i] * data[i];
+    calib.n += data.length;
+    if (now - calib.t0 > 600){
+      const noise = Math.sqrt(calib.sum / calib.n);
+      CONFIG.rmsThreshold = Math.max(noise * 4, 0.005);
+      calib = null;
+      log("噪声底校准完成，阈值=" + CONFIG.rmsThreshold.toFixed(4));
+    }
+  }
+
   if (now < deafUntil){ rxBuf = new Float32Array(0); return; }
   const tmp = new Float32Array(rxBuf.length + data.length);
   tmp.set(rxBuf); tmp.set(data, rxBuf.length); rxBuf = tmp;
-  const maxRx = Math.round(CONFIG.sampleRate * 7);
+  const maxRx = CONFIG.maxRxSamples;
   if (rxBuf.length > maxRx) rxBuf = rxBuf.slice(rxBuf.length - maxRx);
 
   const sps = CONFIG.sps;
@@ -512,6 +538,11 @@ function bindUI(){
   });
   document.getElementById("selfTestBtn").addEventListener("click", () => selfTest().catch(e => log("自测出错："+e.message,"err")));
   document.getElementById("testToneBtn").addEventListener("click", () => playTestTone().catch(e => log("播放失败："+e.message,"err")));
+  document.getElementById("speedSel").addEventListener("change", (e) => {
+    CONFIG.symbolMs = parseInt(e.target.value);
+    deriveRates();
+    log("符号时长 → " + CONFIG.symbolMs + "ms（两端速度需一致）", "warn");
+  });
 
   const input = document.getElementById("msgInput");
   const send = () => {
